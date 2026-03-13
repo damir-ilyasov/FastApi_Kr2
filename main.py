@@ -1,34 +1,70 @@
-from fastapi import FastAPI
-from pydantic import BaseModel, EmailStr, field_validator
+from fastapi import FastAPI, Response, Cookie, HTTPException
+from pydantic import BaseModel
 from typing import Optional
-
+import uuid
 app = FastAPI()
-products = [
-    {"product_id": 123, "name": "Smartphone",  "category": "Electronics", "price": 599.99},
-    {"product_id": 456, "name": "Phone Case",  "category": "Accessories", "price": 19.99},
-    {"product_id": 789, "name": "Iphone",       "category": "Electronics", "price": 1299.99},
-    {"product_id": 101, "name": "Headphones",  "category": "Accessories", "price": 99.99},
-    {"product_id": 202, "name": "Smartwatch",  "category": "Electronics", "price": 299.99},
-]
+sessions: dict = {}
 
-@app.get('/product/{product_id}')
-async def get_product_by_id(product_id: int):
-    for product in products:
-        if product["product_id"] == product_id:
-            return product
+USERS = {
+    "user123": {
+        "password": "password123",
+        "name": "Alice",
+        "email": "alice@example.com",
+        "age": 30
+    },
+    "admin": {
+        "password": "admin123",
+        "name": "Admin",
+        "email": "admin@example.com",
+        "age": 25
+    }
+}
 
-@app.get("/products/search")
-def search_products(
-    keyword: str,
-    category: Optional[str] = None,
-    limit: int = 10
-    ):
-    results = []
-    for product in products:
-        if keyword.lower() not in product["name"].lower():
-            continue
-        if category and product["category"].lower() != category.lower():
-            continue
-        results.append(product)
 
-    return results[:limit]
+class LoginData(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/login")
+def login(data: LoginData, response: Response):
+    user = USERS.get(data.username)
+
+    if not user or user["password"] != data.password:
+        raise HTTPException(status_code=401, detail="Неверный логин или пароль")
+
+    token = str(uuid.uuid4())
+
+    sessions[token] = {
+        "username": data.username,
+        "name": user["name"],
+        "email": user["email"],
+        "age": user["age"]
+    }
+
+    response.set_cookie(
+        key="session_token",
+        value=token,
+        httponly=True,
+        secure=False,
+        samesite="lax"
+    )
+
+    return {"message": "Вход выполнен успешно"}
+
+
+@app.get("/user")
+def get_user(session_token: Optional[str] = Cookie(default=None)):
+    if not session_token or session_token not in sessions:
+        raise HTTPException(status_code=401, detail={"message": "Unauthorized"})
+
+    return sessions[session_token]
+
+
+@app.post("/logout")
+def logout(response: Response, session_token: Optional[str] = Cookie(default=None)):
+    if session_token and session_token in sessions:
+        del sessions[session_token]
+
+    response.delete_cookie("session_token")
+    return {"message": "Выход выполнен"}
