@@ -1,9 +1,12 @@
 from fastapi import FastAPI, Response, Cookie, HTTPException
 from pydantic import BaseModel
 from typing import Optional
+from itsdangerous import URLSafeSerializer, BadSignature
 import uuid
 app = FastAPI()
-sessions: dict = {}
+
+SECRET_KEY = "SyperSecretPuperKey"
+serializer = URLSafeSerializer(SECRET_KEY)
 
 USERS = {
     "user123": {
@@ -19,6 +22,7 @@ USERS = {
         "age": 25
     }
 }
+user_id_map: dict = {}
 
 
 class LoginData(BaseModel):
@@ -33,38 +37,43 @@ def login(data: LoginData, response: Response):
     if not user or user["password"] != data.password:
         raise HTTPException(status_code=401, detail="Неверный логин или пароль")
 
-    token = str(uuid.uuid4())
+    user_id = str(uuid.uuid4())
 
-    sessions[token] = {
-        "username": data.username,
+    user_id_map[user_id] = data.username
+
+    session_token = serializer.dumps(user_id)
+
+    response.set_cookie(
+        key="session_token",
+        value=session_token,
+        httponly=True,
+        secure=False,
+        samesite="lax",
+        max_age=3600
+    )
+
+    return {"message": "Вход выполнен успешно", "user_id": user_id}
+
+
+@app.get("/profile")
+def get_profile(session_token: Optional[str] = Cookie(default=None)):
+    if not session_token:
+        raise HTTPException(status_code=401, detail={"message": "Unauthorized"})
+
+    try:
+        user_id = serializer.loads(session_token)
+    except BadSignature:
+        raise HTTPException(status_code=401, detail={"message": "Unauthorized"})
+
+    username = user_id_map.get(user_id)
+    if not username:
+        raise HTTPException(status_code=401, detail={"message": "Unauthorized"})
+
+    user = USERS[username]
+    return {
+        "user_id": user_id,
+        "username": username,
         "name": user["name"],
         "email": user["email"],
         "age": user["age"]
     }
-
-    response.set_cookie(
-        key="session_token",
-        value=token,
-        httponly=True,
-        secure=False,
-        samesite="lax"
-    )
-
-    return {"message": "Вход выполнен успешно"}
-
-
-@app.get("/user")
-def get_user(session_token: Optional[str] = Cookie(default=None)):
-    if not session_token or session_token not in sessions:
-        raise HTTPException(status_code=401, detail={"message": "Unauthorized"})
-
-    return sessions[session_token]
-
-
-@app.post("/logout")
-def logout(response: Response, session_token: Optional[str] = Cookie(default=None)):
-    if session_token and session_token in sessions:
-        del sessions[session_token]
-
-    response.delete_cookie("session_token")
-    return {"message": "Выход выполнен"}
